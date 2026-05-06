@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# sfx - sf companion with interactive org picker
+# Usage: sfx <any sf command> --target-org ?
+# The ? sentinel triggers an interactive picker for org-taking flags.
+
+set -uo pipefail
+
+_sfx_pick_org() {
+  local -a orgs
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && orgs+=("$line")
+  done < <(sf org list --json 2>/dev/null \
+    | jq -r '[.result.nonScratchOrgs[]?, .result.scratchOrgs[]?, .result.devHubs[]?, .result.sandboxes[]?]
+            | .[] | (.alias // .username) | select(. != null and . != "")' \
+    | sort -u)
+
+  if [[ ${#orgs[@]} -eq 0 ]]; then
+    echo "sfx: no orgs found - run 'sf org login web' first" >&2
+    return 1
+  fi
+
+  echo "Select an org:" >&2
+  local pick
+  PS3="#? "
+  select pick in "${orgs[@]}"; do
+    if [[ -n "${pick:-}" ]]; then
+      echo "$pick"
+      return 0
+    fi
+    echo "Invalid selection. Try again." >&2
+  done < /dev/tty
+  return 1
+}
+
+args=()
+prev=""
+org_flags="--target-org -o --target-dev-hub -v --source-org --from-org"
+
+for arg in "$@"; do
+  if [[ " $org_flags " == *" $prev "* ]] && [[ "$arg" == "?" ]]; then
+    picked=$(_sfx_pick_org) || { echo "sfx: cancelled" >&2; exit 1; }
+    args+=("$picked")
+  elif [[ "$arg" == --target-org=\? \
+       || "$arg" == --target-dev-hub=\? \
+       || "$arg" == --source-org=\? \
+       || "$arg" == --from-org=\? ]]; then
+    flag="${arg%=*}"
+    picked=$(_sfx_pick_org) || { echo "sfx: cancelled" >&2; exit 1; }
+    args+=("$flag=$picked")
+  else
+    args+=("$arg")
+  fi
+  prev="$arg"
+done
+
+exec sf "${args[@]}"
